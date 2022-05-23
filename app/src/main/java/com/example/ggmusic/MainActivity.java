@@ -6,15 +6,23 @@ import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
 import android.Manifest;
+import android.content.BroadcastReceiver;
+import android.content.ComponentName;
 import android.content.ContentResolver;
 import android.content.ContentUris;
+import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.ServiceConnection;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.IBinder;
+import android.os.Looper;
+import android.os.Message;
 import android.provider.MediaStore;
 import android.util.Log;
 import android.view.LayoutInflater;
@@ -30,7 +38,7 @@ import com.google.android.material.bottomnavigation.BottomNavigationView;
 
 import java.io.IOException;
 
-public class MainActivity extends AppCompatActivity implements View.OnClickListener{
+public class MainActivity extends AppCompatActivity implements View.OnClickListener {
 
     private ContentResolver mContentResolver;
     private ListView mPlaylist;
@@ -40,13 +48,13 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     private TextView tvBottomTitle;
     private TextView tvBottomArtist;
     private ImageView ivAlbumThumbnail;
-//    private MediaPlayer mMediaPlayer = null;
-//    public static final int UPDATE_PROGRESS = 1;
+    private MediaPlayer mMediaPlayer = null;
+    public static final int UPDATE_PROGRESS = 1;
     public static final String DATA_URI = "com.glriverside.xgqin.ggmusic.DATA_URI";
     public static final String TITLE = "com.glriverside.xgqin.ggmusic.TITLE";
     public static final String ARTIST = "com.glriverside.xgqin.ggmusic.ARTIST";
- /*   public static final String ACTION_MUSIC_START = "com.glriverside.xgqin.ggmusic.ACTION_MUSIC_START";
-    public static final String ACTION_MUSIC_STOP = "com.glriverside.xgqin.ggmusic.ACTION_MUSIC_STOP";*/
+    public static final String ACTION_MUSIC_START = "com.glriverside.xgqin.ggmusic.ACTION_MUSIC_START";
+    public static final String ACTION_MUSIC_STOP = "com.glriverside.xgqin.ggmusic.ACTION_MUSIC_STOP";
 
     private static final String TAG = MainActivity.class.getSimpleName();
 
@@ -55,6 +63,43 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
 
 
     private ProgressBar pbProgress;
+
+
+    private int musicIndex = 0;
+
+    private MusicService mService;
+    private boolean mBound = false;
+
+    private MusicReceiver musicReceiver;
+
+    private Handler mHandler = new Handler(Looper.getMainLooper()) {
+        public void handleMessage(Message msg) {
+            switch (msg.what) {
+                case UPDATE_PROGRESS:
+                    int position = msg.arg1;
+                    pbProgress.setProgress(position);
+                    break;
+                default:
+                    break;
+            }
+        }
+    };
+
+    private ServiceConnection mConnection = new ServiceConnection() {
+        @Override
+        public void onServiceConnected(ComponentName componentName, IBinder iBinder) {
+            MusicService.MusicServiceBinder binder = (MusicService.MusicServiceBinder) iBinder;
+
+            mService = binder.getService();
+            mBound = true;
+        }
+
+        @Override
+        public void onServiceDisconnected(ComponentName componentName) {
+            mService = null;
+            mBound = false;
+        }
+    };
 
     private final String SELECTION =
             MediaStore.Audio.Media.IS_MUSIC + " = ? " + " AND " +
@@ -73,6 +118,8 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
 
     @Override
     protected void onStart() {
+        Intent intent = new Intent(MainActivity.this, MusicService.class);
+        bindService(intent, mConnection, Context.BIND_AUTO_CREATE);
         super.onStart();
 //        if (mMediaPlayer == null) {
 //            mMediaPlayer = new MediaPlayer();
@@ -87,6 +134,8 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
 //            mMediaPlayer = null;
 //            Log.d(TAG, "onStop invoked!");
 //        }
+        unbindService(mConnection);
+        mBound = false;
         super.onStop();
     }
 
@@ -126,6 +175,8 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
 //                        ex.printStackTrace();
 //                    }
 //                }
+                musicIndex = i;
+
                 Intent serviceIntent = new Intent(MainActivity.this, MusicService.class);
                 serviceIntent.putExtra(MainActivity.DATA_URI, data);
                 serviceIntent.putExtra(MainActivity.TITLE, title);
@@ -144,6 +195,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
                 Uri albumUri = ContentUris.withAppendedId(
                         MediaStore.Audio.Albums.EXTERNAL_CONTENT_URI,
                         albumId);
+
 
                 cursor = mContentResolver.query(
                         albumUri,
@@ -209,6 +261,11 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
 //            Log.d(TAG, "MediaPlayer instance created!");
 //        }
 
+        if (mMediaPlayer == null) {
+            mMediaPlayer = new MediaPlayer();
+            Log.d(TAG, "MediaPlayer instance created!");
+        }
+
         if (ContextCompat.checkSelfPermission(this,
                 Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
             if (ActivityCompat.shouldShowRequestPermissionRationale(MainActivity.this,
@@ -220,6 +277,11 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         } else {
             initPlaylist();
         }
+        musicReceiver = new MusicReceiver();
+        IntentFilter intentFilter = new IntentFilter();
+        intentFilter.addAction(ACTION_MUSIC_START);
+        intentFilter.addAction(ACTION_MUSIC_STOP);
+        registerReceiver(musicReceiver, intentFilter);
     }
 
 
@@ -245,9 +307,18 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
 //            mMediaPlayer = null;
 //        }
 
+        if (mMediaPlayer != null) {
+            mMediaPlayer.stop();
+            mMediaPlayer.release();
+            mMediaPlayer = null;
+        }
+
+        unregisterReceiver(musicReceiver);
+
         super.onDestroy();
 
     }
+
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
@@ -262,6 +333,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
                 break;
         }
     }
+
     @Override
     public void onClick(View view) {
         switch (view.getId()) {
@@ -272,14 +344,63 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
 //                    if (mMediaPlayer != null) {
 //                        mMediaPlayer.start();
 //                    }
+                    mService.play();
                     ivPlay.setImageResource(R.drawable.ic_baseline_pause_circle_outline_24);
                 } else {
 //                    if (mMediaPlayer != null) {
 //                        mMediaPlayer.pause();
 //                    }
+                    mService.pause();
                     ivPlay.setImageResource(R.drawable.ic_play_circle_outline_black_24dp);
                 }
                 break;
         }
     }
+
+    private class MusicProgressRunnable implements Runnable {
+
+        public MusicProgressRunnable() {
+        }
+
+        @Override
+        public void run() {
+            boolean mThreadWorking = true;
+            while (mThreadWorking) {
+                try {
+                    if (mService != null) {
+                        int position = mService.getCurrentPosition();
+
+                        Message message = new Message();
+                        message.what = UPDATE_PROGRESS;
+                        message.arg1 = position;
+                        mHandler.sendMessage(message);
+
+                        Log.d(TAG, "CurrentPosition: " + position);
+                    }
+
+                    mThreadWorking = mService.isPlaying();
+
+                    Thread.sleep(100);
+                } catch (InterruptedException ie) {
+                    ie.printStackTrace();
+                }
+            }
+        }
+    }
+
+    public class MusicReceiver extends BroadcastReceiver {
+
+        @Override
+        public void onReceive(Context context, Intent intent) {
+
+            if (intent.getAction().equals(ACTION_MUSIC_START)) {
+                if (mService != null) {
+                    pbProgress.setMax(mService.getDuration());
+                    Log.d(TAG, "Duration: " + mService.getDuration());
+                    new Thread(new MusicProgressRunnable()).start();
+                }
+            }
+        }
+    }
+
 }
